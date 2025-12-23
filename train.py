@@ -176,7 +176,65 @@ def parse_args():
     parser.add_argument('--images-dir', type=str,
                         default=os.environ.get('SH17_IMAGES_DIR', None),
                         help='Görsellerin bulunduğu dizin (varsayılan: project_root/data/images)')
+    parser.add_argument('--checkpoints', type=str, default=None,
+                        help='Checkpoint listesi, virgülle ayrılmış (örn: 25,50,100,200)')
+    parser.add_argument('--model', type=str, default=None,
+                        help='Model adı (örn: yolo12x) - interaktif menüyü atlar')
+    parser.add_argument('--overwrite', action='store_true',
+                        help='Sıfırdan başla (eski eğitimi sil)')
     return parser.parse_args()
+
+def get_current_epoch(last_pt_path):
+    """Checkpoint dosyasından mevcut epoch'u oku"""
+    try:
+        ckpt = torch.load(last_pt_path, map_location='cpu')
+        return ckpt.get('epoch', -1) + 1
+    except:
+        return 0
+
+def run_validation_and_report(model_path, yaml_path, cfg, model_name, epoch, result_dir, ckpt_dir, duration):
+    """Validation çalıştır ve rapor kaydet"""
+    print(f"\n{'='*50}")
+    print(f"📊 CHECKPOINT {epoch} - Validation & Rapor")
+    print(f"{'='*50}")
+    
+    gc.collect()
+    torch.cuda.empty_cache()
+    
+    val_model = YOLO(str(model_path))
+    metrics = val_model.val(data=str(yaml_path), device=0, batch=cfg.batch_size, workers=0, verbose=False)
+    
+    save_report(model_name, metrics, duration, epoch, str(result_dir))
+    
+    # Checkpoint'i kaydet
+    dest_pt = ckpt_dir / f"{model_name}_{epoch}ep.pt"
+    shutil.copy(model_path, dest_pt)
+    print(f"💾 Checkpoint Kaydedildi: {dest_pt}")
+    
+    del val_model
+    gc.collect()
+    torch.cuda.empty_cache()
+    
+    return metrics
+
+def train_to_checkpoint(model, yaml_path, cfg, model_name, target_epoch, workers, is_first_run=False):
+    """Belirli bir epoch'a kadar eğit"""
+    print(f"\n🎯 Hedef Epoch: {target_epoch}")
+    
+    model.train(
+        data=str(yaml_path),
+        epochs=target_epoch,
+        imgsz=cfg.imgsz,
+        batch=cfg.batch_size,
+        workers=workers,
+        device=0,
+        project="runs/detect",
+        name=model_name,
+        exist_ok=True,
+        resume=not is_first_run,  # İlk çalıştırma değilse resume=True
+        cache=cfg.cache_images if is_first_run else False,  # Cache sadece ilk seferde
+        patience=0  # Early stopping kapalı (checkpoint'lere ulaşmak için)
+    )
 
 def main():
     args = parse_args()
@@ -198,70 +256,84 @@ def main():
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     print("\n" + "="*50)
-    print("TEK MODEL EĞİTİM ARACI (V27)")
+    print("YOLO EĞİTİM ARACI - CHECKPOINT MODU (V28)")
     print("="*50)
     
-    # 1. Menüden Seçim
-    model_name = select_model_menu()
+    # 1. Model Seçimi (CLI veya interaktif)
+    if args.model:
+        model_name = args.model
+        print(f"📦 Model (CLI): {model_name}")
+    else:
+        model_name = select_model_menu()
     pt_file = f"{model_name}.pt"
     
-    # 2. Mod Seçimi
-    print("\n[R]esume (Devam Et) | [O]verwrite (Sıfırla)")
-    mode = input("Seçim [R/o]: ").strip().upper()
-    action = "OVERWRITE" if mode == 'O' else "RESUME"
+    # 2. Checkpoint Listesi (CLI veya interaktif)
+    if args.checkpoints:
+        checkpoints = [int(x.strip()) for x in args.checkpoints.split(',')]
+        print(f"🎯 Checkpoints (CLI): {checkpoints}")
+    else:
+        print("\n📋 Checkpoint epoch'larını virgülle girin")
+        print("   Örnek: 25,50,100,200")
+        checkpoint_input = input("Checkpoints: ").strip()
+        try:
+            checkpoints = [int(x.strip()) for x in checkpoint_input.split(',')]
+        except:
+            print("❌ Geçersiz giriş, varsayılan kullanılıyor: [25, 50, 100]")
+            checkpoints = [25, 50, 100]
     
-    # 3. Epoch Hedefi
-    try:
-        extra_epochs = int(input("\nKaç epoch eğitilecek (örn: 50): ").strip())
-    except: extra_epochs = 50
+    # Checkpoint'leri sırala
+    checkpoints = sorted(set(checkpoints))
+    
+    # 3. Mod Seçimi (CLI veya interaktif)
+    if args.overwrite:
+        action = "OVERWRITE"
+    else:
+        print("\n[R]esume (Devam Et) | [O]verwrite (Sıfırla)")
+        mode = input("Seçim [R/o]: ").strip().upper()
+        action = "OVERWRITE" if mode == 'O' else "RESUME"
 
     # Yolları belirle
     run_dir = Path("runs/detect") / model_name
     last_pt = run_dir / "weights" / "last.pt"
     
-    resume_flag = False
-    workers = cfg.workers # Varsayılan: 8 (Hızlı)
+    workers = cfg.workers
+    current_epoch = 0
     
-    # --- BURASI DÜZELTİLDİ ---
     if action == "OVERWRITE":
         if run_dir.exists():
             try: shutil.rmtree(run_dir)
             except: pass
             print("🧹 Eski eğitim klasörü silindi.")
-        
         current_weights = pt_file
-        current_epoch = 0  # <--- EKLENEN SATIR: HATA BURADAYDI
-        
+        current_epoch = 0
     else:
-        # Resume durumu
         if last_pt.exists():
-            print(f"🔄 Kaldığı yer tespit edildi: {last_pt}")
+            current_epoch = get_current_epoch(last_pt)
+            print(f"🔄 Kaldığı yer tespit edildi: Epoch {current_epoch}")
             current_weights = str(last_pt)
-            resume_flag = True
-            
-            try:
-                ckpt = torch.load(last_pt, map_location='cpu')
-                current_epoch = ckpt.get('epoch', -1) + 1
-                print(f"ℹ️  Şu anki Epoch: {current_epoch}")
-                
-                workers = 0 
-                force_patch_workers(last_pt)
-            except: 
-                current_epoch = 0
+            force_patch_workers(last_pt)
         else:
             print("⚠️ Kayıtlı model bulunamadı, sıfırdan başlanıyor...")
             current_weights = pt_file
             current_epoch = 0
-    # --------------------------
-
-    # Hedef Epoch Hesapla
-    total_target_epochs = current_epoch + extra_epochs if resume_flag else extra_epochs
     
-    print(f"\n🚀 MODEL: {model_name.upper()}")
-    print(f"🎯 HEDEF: {current_epoch} -> {total_target_epochs} Epoch")
-    print(f"⚡ AYARLAR: Cache={cfg.cache_images}, Workers={workers}")
+    # Zaten tamamlanmış checkpoint'leri atla
+    remaining_checkpoints = [cp for cp in checkpoints if cp > current_epoch]
     
-    input("👉 Başlamak için ENTER...")
+    if not remaining_checkpoints:
+        print(f"\n✅ Tüm checkpoint'ler zaten tamamlanmış! (Mevcut: {current_epoch})")
+        return
+    
+    print(f"\n{'='*50}")
+    print(f"🚀 EĞİTİM PLANI")
+    print(f"{'='*50}")
+    print(f"📦 Model: {model_name.upper()}")
+    print(f"📍 Başlangıç Epoch: {current_epoch}")
+    print(f"🎯 Checkpoints: {remaining_checkpoints}")
+    print(f"🏁 Final Epoch: {remaining_checkpoints[-1]}")
+    print(f"⚡ Ayarlar: Cache={cfg.cache_images}, Workers={workers}, Batch={cfg.batch_size}")
+    
+    input("\n👉 Başlamak için ENTER...")
     
     if os.name == 'nt':
         torch.multiprocessing.set_sharing_strategy('file_system')
@@ -269,10 +341,11 @@ def main():
     gc.collect()
     torch.cuda.empty_cache()
     
-    start_time = time.time()
+    overall_start_time = time.time()
     
     try:
-        print(f"📥 Model yükleniyor: {current_weights}...")
+        # Model yükle
+        print(f"\n📥 Model yükleniyor: {current_weights}...")
         try:
             model = YOLO(current_weights)
         except Exception as e:
@@ -280,61 +353,55 @@ def main():
             print(f"🛑 Teknik Detay: {e}")
             sys.exit(1)
 
-        # EĞİTİM
-        if resume_flag:
-            print("🔄 Fine-Tuning Modu (Süreç uzatılıyor)...")
-            model.train(
-                data=str(yaml_path),
-                epochs=total_target_epochs,
-                imgsz=cfg.imgsz,
-                batch=cfg.batch_size,
-                workers=workers,
-                device=0,
-                project="runs/detect",
-                name=model_name,
-                exist_ok=True,
-                resume=False, 
-                cache=cfg.cache_images,
-                patience=50
-            )
-        else:
-            print("🆕 Sıfırdan Eğitim Başlıyor...")
-            model.train(
-                data=str(yaml_path),
-                epochs=total_target_epochs,
-                imgsz=cfg.imgsz,
-                batch=cfg.batch_size,
-                workers=workers,
-                device=0,
-                project="runs/detect",
-                name=model_name,
-                exist_ok=True,
-                cache=cfg.cache_images,
-                patience=50
-            )
-            
-        # SONUÇLARI KAYDET
-        final_last_pt = run_dir / "weights" / "last.pt"
+        # Her checkpoint için eğit ve rapor oluştur
+        is_first_run = (current_epoch == 0)
         
-        if final_last_pt.exists():
-            print("📊 Rapor ve Yedek Oluşturuluyor...")
+        for i, target_epoch in enumerate(remaining_checkpoints):
+            checkpoint_start_time = time.time()
             
-            del model
-            gc.collect()
-            torch.cuda.empty_cache()
+            print(f"\n{'#'*50}")
+            print(f"# CHECKPOINT {i+1}/{len(remaining_checkpoints)}: Epoch {target_epoch}")
+            print(f"{'#'*50}")
             
-            val_model = YOLO(str(final_last_pt))
-            metrics = val_model.val(data=str(yaml_path), device=0, batch=cfg.batch_size, workers=0, verbose=False)
+            # Eğit
+            train_to_checkpoint(model, yaml_path, cfg, model_name, target_epoch, workers, is_first_run)
             
-            duration = (time.time() - start_time) / 60.0
-            save_report(model_name, metrics, duration, total_target_epochs, str(result_dir))
+            # Validation ve rapor
+            final_last_pt = run_dir / "weights" / "last.pt"
+            if final_last_pt.exists():
+                checkpoint_duration = (time.time() - checkpoint_start_time) / 60.0
+                total_duration = (time.time() - overall_start_time) / 60.0
+                
+                run_validation_and_report(
+                    final_last_pt, yaml_path, cfg, model_name, 
+                    target_epoch, result_dir, ckpt_dir, total_duration
+                )
+                
+                # Modeli tekrar yükle (resume için)
+                del model
+                gc.collect()
+                torch.cuda.empty_cache()
+                model = YOLO(str(final_last_pt))
             
-            dest_pt = ckpt_dir / f"{model_name}_{total_target_epochs}ep.pt"
-            shutil.copy(final_last_pt, dest_pt)
-            print(f"💾 Model Kaydedildi: {dest_pt}")
+            is_first_run = False  # Artık resume modunda
+            print(f"\n✅ Checkpoint {target_epoch} tamamlandı! ({checkpoint_duration:.1f} dk)")
+        
+        # Final özet
+        total_duration = (time.time() - overall_start_time) / 60.0
+        print(f"\n{'='*50}")
+        print(f"🎉 TÜM CHECKPOINTS TAMAMLANDI!")
+        print(f"{'='*50}")
+        print(f"⏱️ Toplam Süre: {total_duration:.1f} dakika ({total_duration/60:.2f} saat)")
+        print(f"📊 Raporlar: {result_dir / 'reports'}")
+        print(f"💾 Modeller: {ckpt_dir}")
 
+    except KeyboardInterrupt:
+        print(f"\n\n⚠️ Eğitim kullanıcı tarafından durduruldu!")
+        print(f"💡 Devam etmek için: python train.py --checkpoints {','.join(map(str, remaining_checkpoints))}")
     except Exception as e:
         print(f"\n❌ BEKLENMEYEN HATA: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()
