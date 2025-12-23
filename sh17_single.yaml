@@ -1,5 +1,5 @@
-train: C:\Users\yusuf\Downloads\SH17dataset-master\train_abs.txt
-val: C:\Users\yusuf\Downloads\SH17dataset-master\val_abs.txt
+train: /project/SH17Classification/train_abs.txt
+val: /project/SH17Classification/val_abs.txt
 
 names:
   0: person

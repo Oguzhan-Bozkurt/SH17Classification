@@ -36,8 +36,8 @@ class Config:
     ])
     
     imgsz: int = 640
-    batch_size: int = 16  # A5000
-    workers: int = 4      # Hız için
+    batch_size: int = 32  # A5000
+    workers: int = 128      # Hız için
     cache_images: bool = True # RAM Cache AÇIK
 
 # ============================================================================
@@ -120,20 +120,41 @@ def force_patch_workers(ckpt_path):
 
 def select_model_menu():
     models = [
-        {"name": "yolov10l", "file": "yolov10l.pt"},
+        # YOLOv10 Serisi
+        {"name": "yolov10n", "file": "yolov10n.pt"},
+        {"name": "yolov10s", "file": "yolov10s.pt"},
         {"name": "yolov10m", "file": "yolov10m.pt"},
         {"name": "yolov10b", "file": "yolov10b.pt"},
-        {"name": "yolo11l", "file": "yolo11l.pt"},
+        {"name": "yolov10l", "file": "yolov10l.pt"},
+        {"name": "yolov10x", "file": "yolov10x.pt"},
+        # YOLO11 Serisi
+        {"name": "yolo11n", "file": "yolo11n.pt"},
+        {"name": "yolo11s", "file": "yolo11s.pt"},
         {"name": "yolo11m", "file": "yolo11m.pt"},
-        {"name": "yolo12l", "file": "yolo12l.pt"}, 
+        {"name": "yolo11l", "file": "yolo11l.pt"},
+        {"name": "yolo11x", "file": "yolo11x.pt"},
+        # YOLO12 Serisi
+        {"name": "yolo12n", "file": "yolo12n.pt"},
+        {"name": "yolo12s", "file": "yolo12s.pt"},
         {"name": "yolo12m", "file": "yolo12m.pt"},
+        {"name": "yolo12l", "file": "yolo12l.pt"},
+        {"name": "yolo12x", "file": "yolo12x.pt"},
     ]
-    print("\n--------------------------------")
+    print("\n" + "=" * 40)
     print("MODEL SEÇİMİ")
-    print("--------------------------------")
-    for i, m in enumerate(models, 1):
-        status = "✅ İndirilmiş" if os.path.exists(m['file']) else "⬇️ İndirilecek"
-        print(f" {i}. {m['name']:<10} ({status})")
+    print("=" * 40)
+    print("\n📦 YOLOv10 Serisi:")
+    for i, m in enumerate(models[:6], 1):
+        status = "✅" if os.path.exists(m['file']) else "⬇️"
+        print(f"  {i:2}. {m['name']:<12} {status}")
+    print("\n📦 YOLO11 Serisi:")
+    for i, m in enumerate(models[6:11], 7):
+        status = "✅" if os.path.exists(m['file']) else "⬇️"
+        print(f"  {i:2}. {m['name']:<12} {status}")
+    print("\n📦 YOLO12 Serisi:")
+    for i, m in enumerate(models[11:], 12):
+        status = "✅" if os.path.exists(m['file']) else "⬇️"
+        print(f"  {i:2}. {m['name']:<12} {status}")
     
     while True:
         try:
