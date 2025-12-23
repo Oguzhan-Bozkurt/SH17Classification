@@ -16,13 +16,15 @@ except ImportError:
 
 # İndirilecek modeller (train.py ile aynı liste)
 MODELS = [
-    "yolov10l.pt",
-    "yolov10m.pt",
-    "yolov10b.pt",
-    "yolo11l.pt",
-    "yolo11m.pt",
-    "yolo12l.pt",
-    "yolo12m.pt",
+    "yolov10n.pt",
+    "yolov10s.pt",
+    "yolov10x.pt",
+    "yolo11n.pt",
+    "yolo11s.pt",
+    "yolo11x.pt",
+    "yolo12x.pt",
+    "yolo12n.pt",
+    "yolo12s.pt",
 ]
 
 def download_all_models():
