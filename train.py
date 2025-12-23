@@ -36,8 +36,8 @@ class Config:
     ])
     
     imgsz: int = 640
-    batch_size: int = 32  # A5000
-    workers: int = 128      # Hız için
+    batch_size: int = 64  # A5000
+    workers: int = 64     # Hız için
     cache_images: bool = True # RAM Cache AÇIK
 
 # ============================================================================
